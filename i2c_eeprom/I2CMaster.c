@@ -8,7 +8,7 @@
 * Related Document: See Readme.md
 *
 *******************************************************************************
-* Copyright 2022, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2022-2023, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -43,21 +43,13 @@
 
 /* Header file includes */
 #include "I2CMaster.h"
-#include "stdio.h"
-#include "stdlib.h"
+
 /*******************************************************************************
 * Macros
 *******************************************************************************/
 /* I2C master interrupt macros */
 #define I2C_INTR_NUM            CYBSP_I2C_IRQ
 #define I2C_INTR_PRIORITY       (3UL)
-#define LED_DELAY_MS            (500)
-/* Command valid status */
-
-/* Combine master error statuses in single mask  */
-#define MASTER_ERROR_MASK   (CY_SCB_I2C_MASTER_DATA_NAK | CY_SCB_I2C_MASTER_ADDR_NAK   | \
-                            CY_SCB_I2C_MASTER_ARB_LOST | CY_SCB_I2C_MASTER_ABORT_START | \
-                            CY_SCB_I2C_MASTER_BUS_ERR)
 
 /*******************************************************************************
 * Global variables
@@ -71,6 +63,13 @@ cy_stc_scb_i2c_master_xfer_config_t masterTransferCfg =
     .xferPending  = false
 };
 
+/*structure for a single interrupt channel*/
+cy_stc_sysint_t CYBSP_I2C_SCB_IRQ_cfg =
+{
+     /*.intrSrc =*/ CYBSP_I2C_IRQ,
+     /*.intrPriority =*/ 3u
+};
+
 /** The instance-specific context structure.
  * It is used by the driver for internal configuration and
  * data keeping for the I2C. Do not modify anything in this structure.
@@ -80,7 +79,7 @@ cy_stc_scb_i2c_context_t CYBSP_I2C_context;
 /* Read buffer */
 uint8_t readbuffer[READ_SIZE];
 
-/* Write buffer */
+/* Write buffer, 2UL is for eeprom start address high and low */
 uint8_t writebuffer[WRITE_SIZE+2UL];
 
 /*******************************************************************************
@@ -122,29 +121,18 @@ uint8_t WriteToEEPROM(uint32_t writeSize)
     cy_en_scb_i2c_status_t  errorStatus;
     uint32_t masterStatus;
 
-    char str[5] = {0};
-
-    /* Timeout counter */
-    uint32_t timeout = 1000000UL;
+    /* Timeout 1 sec (one unit is milliseconds) */
+    uint32_t timeout = 1000UL;
 
     /* Memory address of the EEPROM */
     writebuffer[0] = EEPROM_START_ADDR_HI;
     writebuffer[1] = EEPROM_START_ADDR_LO;
 
-    if(writeSize != 0)
-    {
-        /* Send string over serial terminal*/
-        Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Data being written to EEPROM : ");
-    }
     /* Append write buffer with data (0 - (writeSize-1)) to write to EEPROM */
     for(uint8_t i = 0 ; i < writeSize; i++)
     {
         writebuffer[i+2]  = i;
-        sprintf (str, "%d ", writebuffer[i+2]);
-        Cy_SCB_UART_PutString(CYBSP_UART_HW, str);
     }
-
-    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n");
 
     /* Setup transfer specific parameters */
     masterTransferCfg.buffer     = writebuffer;
@@ -161,7 +149,7 @@ uint8_t WriteToEEPROM(uint32_t writeSize)
         do
         {
             masterStatus  = Cy_SCB_I2C_MasterGetStatus(CYBSP_I2C_HW, &CYBSP_I2C_context);
-            Cy_SysLib_DelayUs(CY_SCB_WAIT_1_UNIT);
+            Cy_SysLib_Delay(CY_SCB_WAIT_1_UNIT);
             timeout--;
 
         } while ((0UL != (masterStatus & CY_SCB_I2C_MASTER_BUSY)) && (timeout > 0));
@@ -205,10 +193,8 @@ uint8_t ReadFromEEPROM(uint32_t readSize)
     cy_en_scb_i2c_status_t errorStatus;
     uint32_t masterStatus;
 
-    char str[5] = {0};
-
     /* Timeout counter */
-    uint32_t timeout = 1000000UL;
+    uint32_t timeout = 1000UL;
 
     /* Write the starting address of memory to read data from EEPROM */
     if(TRANSFER_CMPLT != WriteToEEPROM(0))
@@ -227,7 +213,7 @@ uint8_t ReadFromEEPROM(uint32_t readSize)
         do
         {
             masterStatus  = Cy_SCB_I2C_MasterGetStatus(CYBSP_I2C_HW, &CYBSP_I2C_context);
-            Cy_SysLib_DelayUs(CY_SCB_WAIT_1_UNIT);
+            Cy_SysLib_Delay(CY_SCB_WAIT_1_UNIT);
             timeout--;
 
         } while ((0UL != (masterStatus & CY_SCB_I2C_MASTER_BUSY)) && (timeout > 0));
@@ -247,14 +233,9 @@ uint8_t ReadFromEEPROM(uint32_t readSize)
             }
         }
 
-        /* Send string over serial terminal*/
-        Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Data read back from EEPROM : ");
-
         /* Verify if data read back matches with the data written to EEPROM */
         for(uint8_t i = 0; i < readSize; i++)
         {
-            sprintf (str, "%d ", readbuffer[i]);
-            Cy_SCB_UART_PutString(CYBSP_UART_HW, str);
             if(readbuffer[i] != writebuffer[i+2])
             {
                 status = INVALID_DATA_ERROR;
@@ -262,7 +243,6 @@ uint8_t ReadFromEEPROM(uint32_t readSize)
             }
 
         }
-        Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n");
     }
     return (status);
 }
@@ -284,11 +264,6 @@ uint32_t initI2CMaster(void)
 {
     cy_en_scb_i2c_status_t initStatus;
     cy_en_sysint_status_t sysStatus;
-    cy_stc_sysint_t CYBSP_I2C_SCB_IRQ_cfg =
-    {
-            /*.intrSrc =*/ CYBSP_I2C_IRQ,
-            /*.intrPriority =*/ 3u
-    };
 
     /*Initialize and enable the I2C in master mode*/
     initStatus = Cy_SCB_I2C_Init(CYBSP_I2C_HW, &CYBSP_I2C_config, &CYBSP_I2C_context);
@@ -308,28 +283,6 @@ uint32_t initI2CMaster(void)
     /*Enable the I2C in master mode*/
     Cy_SCB_I2C_Enable(CYBSP_I2C_HW, &CYBSP_I2C_context);
     return I2C_SUCCESS;
-}
-
-/*******************************************************************************
-* Function Name: handle_error
-********************************************************************************
-* Summary:
-*  Function to handle errors
-*
-* Parameters:
-*  none
-*
-* Return:
-*  none
-*
-*******************************************************************************/
-void handle_error(void)
-{
-    /* Disable all interrupts. */
-    __disable_irq();
-
-    /* Infinite loop. */
-    while(1u) {}
 }
 
 /*******************************************************************************

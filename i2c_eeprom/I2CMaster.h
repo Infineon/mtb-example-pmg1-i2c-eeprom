@@ -7,7 +7,7 @@
 * Related Document: See Readme.md
 *
 *******************************************************************************
-* Copyright 2022, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2022-2023, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -66,6 +66,16 @@
 #define EEPROM_START_ADDR_LO    (0x00)
 
 #define EEPROM_SLAVE_ADDR       (0x51)
+
+/* Delay of 500 milliseconds*/
+#define LED_DELAY_MS            (500)
+
+/* Command valid status */
+
+/* Combine master error statuses in single mask  */
+#define MASTER_ERROR_MASK   (CY_SCB_I2C_MASTER_DATA_NAK | CY_SCB_I2C_MASTER_ADDR_NAK   | \
+                            CY_SCB_I2C_MASTER_ARB_LOST | CY_SCB_I2C_MASTER_ABORT_START | \
+                            CY_SCB_I2C_MASTER_BUS_ERR)
 
 /*******************************************************************************
 * Function Prototypes

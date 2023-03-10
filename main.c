@@ -6,7 +6,7 @@
 * Related Document: See README.md
 *
 *******************************************************************************
-* Copyright 2022, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2022-2023, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -43,19 +43,23 @@
  * Include header files
  ******************************************************************************/
 #include "cybsp.h"
-#include "cyhal.h"
 #include "cy_pdl.h"
-#include "stdio.h"
 #include "I2CMaster.h"
+#include <inttypes.h>
+#include <stdio.h>
 
 /*******************************************************************************
 * Macros
 *******************************************************************************/
 #define CY_ASSERT_FAILED          (0u)
 
+/* Debug print macro to enable UART print */
+#define DEBUG_PRINT               (0u)
+
 /*******************************************************************************
 * Global Variable
 *******************************************************************************/
+/* Clear the interrupt*/
 uint32_t interrupt_flag = 0u;
 
 /*******************************************************************************
@@ -72,26 +76,42 @@ const cy_stc_sysint_t switch_interrupt_config =
     .intrPriority = 3u,
 };
 
+#if DEBUG_PRINT
+
+/* Structure for UART Context */
+cy_stc_scb_uart_context_t CYBSP_UART_context;
+
+/* Variable used for tracking the print status */
+volatile bool ENTER_LOOP = true;
 
 /*******************************************************************************
-* Function Name: Switch_IntHandler
+* Function Name: check_status
 ********************************************************************************
-*
 * Summary:
-*  This function is executed when interrupt is triggered through the switch.
+*  Prints the error message.
+*
+* Parameters:
+*  error_msg - message to print if any error encountered.
+*  status - status obtained after evaluation.
+*
+* Return:
+*  void
 *
 *******************************************************************************/
-
-void Switch_IntHandler(void)
+void check_status(char *message, cy_rslt_t status)
 {
+    char error_msg[50];
 
-    /* Clears the triggered pin interrupt */
-    Cy_GPIO_ClearInterrupt(CYBSP_USER_BTN_PORT, CYBSP_USER_BTN_NUM);
-    NVIC_ClearPendingIRQ(switch_interrupt_config.intrSrc);
+    sprintf(error_msg, "Error Code: 0x%08" PRIX32 "\n", status);
 
-    /* Set interrupt flag */
-    interrupt_flag = 1u;
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n=====================================================\r\n");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\nFAIL: ");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, message);
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, error_msg);
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n=====================================================\r\n");
 }
+#endif
 
 /*******************************************************************************
 * Function Name: main
@@ -113,7 +133,8 @@ void Switch_IntHandler(void)
 int main(void)
 {
     cy_rslt_t result;
-    cy_stc_scb_uart_context_t CYBSP_UART_context;
+    cy_en_sysint_status_t intr_result;
+    uint32_t status;
 
     /* Initialize the device and board peripherals */
     result = cybsp_init();
@@ -124,64 +145,85 @@ int main(void)
         CY_ASSERT(CY_ASSERT_FAILED);
     }
 
-    /* Configure and enable the UART peripheral */
-    Cy_SCB_UART_Init(CYBSP_UART_HW, &CYBSP_UART_config, &CYBSP_UART_context);
-    Cy_SCB_UART_Enable(CYBSP_UART_HW);
+#if DEBUG_PRINT
+
+     /* Configure and enable the UART peripheral */
+     Cy_SCB_UART_Init(CYBSP_UART_HW, &CYBSP_UART_config, &CYBSP_UART_context);
+     Cy_SCB_UART_Enable(CYBSP_UART_HW);
+
+     /* Sequence to clear screen */
+     Cy_SCB_UART_PutString(CYBSP_UART_HW, "\x1b[2J\x1b[;H");
+
+     /* Print "I2C Multi Master" */
+     Cy_SCB_UART_PutString(CYBSP_UART_HW, "**************************");
+     Cy_SCB_UART_PutString(CYBSP_UART_HW, "PMG1 MCU: I2C EEPROM");
+     Cy_SCB_UART_PutString(CYBSP_UART_HW, "**************************\r\n\n");
+
+#endif
 
     /* Enable global interrupts */
     __enable_irq();
 
-    uint32_t status;
-
-    /*I2C master initialisation*/
+    /*I2C master initialization*/
     status = initI2CMaster();
     if(status != I2C_SUCCESS)
     {
-        CY_ASSERT(0);
+#if DEBUG_PRINT
+        check_status("API initI2CMaster failed with error code", status);
+#endif
+        CY_ASSERT(CY_ASSERT_FAILED);
     }
 
     /*User switch (CYBSP_USER_BTN) interrupt initialization*/
-    result = Cy_SysInt_Init(&switch_interrupt_config, &Switch_IntHandler);
-    if (result != CY_SYSINT_SUCCESS)
+    intr_result = Cy_SysInt_Init(&switch_interrupt_config, &Switch_IntHandler);
+    if (intr_result != CY_SYSINT_SUCCESS)
     {
-        CY_ASSERT(0);
+#if DEBUG_PRINT
+        check_status("API Cy_SysInt_Init failed with error code", intr_result);
+#endif
+        CY_ASSERT(CY_ASSERT_FAILED);
     }
+
     NVIC_ClearPendingIRQ(switch_interrupt_config.intrSrc);
 
     /*Enabling the User switch interrupt*/
     NVIC_EnableIRQ(switch_interrupt_config.intrSrc);
 
-    /* Send a string over serial terminal */
-    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\x1b[2J\x1b[;H");
-    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n**************PMG1 MCU:I2C EEPROM**************\r\n");
-
     for(;;)
     {
         if (interrupt_flag == 1)
         {
-            Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Start writing to EEPROM \r\n");
+
+#if DEBUG_PRINT
+            Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Start writing to EEPROM \r\n\n");
+#endif
 
             /* Write WRITE_SIZE bytes to EEPROM memory starting from address 0x0000  */
             if (TRANSFER_CMPLT == WriteToEEPROM(WRITE_SIZE))
             {
+                /*Delays for 5 milliseconds.*/
                 Cy_SysLib_Delay(5);
 
-                Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Start reading back from EEPROM \r\n");
+#if DEBUG_PRINT
+                Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n\n Start reading back from EEPROM \r\n\n");
+#endif
 
                 /* Read back and verify written data from EEPROM*/
                 status = ReadFromEEPROM(READ_SIZE);
 
                 if (status == TRANSFER_CMPLT)
                 {
-                    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Read back successful \r\n");
-
+#if DEBUG_PRINT
+                    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n\n Read back successful \r\n");
+#endif
                     /*Blink User LED (CYBSP_USER_LED) once if read back is successful*/
                     BlinkUserLED(1);
                 }
                 else if(status == INVALID_DATA_ERROR)
                 {
-                    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Mismatch between data written and read back \r\n");
-
+#if DEBUG_PRINT
+                    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n\n Mismatch between data written and read back \r\n");
+#endif
                     /*Blink User LED (CYBSP_USER_LED) twice if read back returns invalid data*/
                     BlinkUserLED(2);
                 }
@@ -190,14 +232,42 @@ int main(void)
             {
                 /*Blink User LED (CYBSP_USER_LED) thrice if writing to EEPROM failed*/
                 BlinkUserLED(3);
-
-                Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n Writing to EEPROM failed \r\n");
+#if DEBUG_PRINT
+                Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n\n Writing to EEPROM failed \r\n");
+#endif
             }
 
             /* Clear the interrupt*/
             interrupt_flag = 0u;
         }
+#if DEBUG_PRINT
+        if (ENTER_LOOP)
+        {
+            Cy_SCB_UART_PutString(CYBSP_UART_HW, "Entered for loop\r\n");
+            ENTER_LOOP = false;
+        }
+#endif
     }
+}
+
+/*******************************************************************************
+* Function Name: Switch_IntHandler
+********************************************************************************
+*
+* Summary:
+*  This function is executed when interrupt is triggered through the switch.
+*
+*******************************************************************************/
+
+void Switch_IntHandler(void)
+{
+
+    /* Clears the triggered pin interrupt */
+    Cy_GPIO_ClearInterrupt(CYBSP_USER_BTN_PORT, CYBSP_USER_BTN_NUM);
+    NVIC_ClearPendingIRQ(switch_interrupt_config.intrSrc);
+
+    /* Set interrupt flag */
+    interrupt_flag = 1u;
 }
 
 /* [] END OF FILE */
